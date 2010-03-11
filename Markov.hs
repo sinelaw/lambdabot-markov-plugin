@@ -3,12 +3,13 @@
 module Plugin.Markov (theModule) where
 
 import Plugin
-import qualified Message as Msg (nick, Nick, Message, showNick, readNick, lambdabotName, nName)
+import qualified Message as Msg (nick, Nick, Message, showNick, readNick, lambdabotName, nName, names, channels)
 import qualified NickEq as E
 import qualified Data.Map as Map
 import qualified Data.ByteString.Char8 as P
 
 import Text.Printf
+import Text.Regex
 import System.Random as Random
 import Control.Monad.Random as MonadRandom
 
@@ -18,34 +19,82 @@ $(plugin "Markov")
 type MarkovState = P.ByteString
 type Markov m a = ModuleT MarkovState m a
 
+readMaybe :: (Read a) => String -> Maybe a
+readMaybe = fmap fst . listToMaybe . reads
+
+msgChans :: Msg.Message a => a -> [String]
+msgChans msg = map Msg.nName $ Msg.channels msg
+
 instance Module MarkovModule MarkovState where
 
-    moduleCmds _ = ["markov"]
-    moduleHelp _ "markov" = "markov <number of letters> [start phrase]"
+    moduleCmds _ = ["markov", "warkov", "comprext"]
+    moduleHelp _ "markov" = "markov [<number of letters> | <start phrase>]"
+    moduleHelp _ "warkov" = "warkov [<number of words> | <start phrase>]"
+    moduleHelp _ "comprext" = "comprext <phrase>"
 
     moduleDefState  _ = return P.empty
     moduleSerialize _ = Just stdSerial
 
-    process      _ _ _ "markov" rest = listMarkov memsize startphrase
-        where w = words rest
-              memsize = read . head $ w
-              startphrase = intercalate " " (tail w)
+    process      _ msg _ "comprext" rest = do 
+      ks <- readMS
+      return [listComprext ks rest]
+    process      _ msg _ "markov" rest = listArkov listMarkov length rest
+    process      _ msg _ "warkov" rest = listArkov listWarkov (length . words) rest
+      -- where fixedReply = subRegex regex' markovReply "\\0\0"
+          --regex' = mkRegex $ "(" ++ (intercalate "|" nicks) ++ ")"
+          --nicks = Msg.names "freenode" (msgChans msg)
+              
 
     contextual   _ msg _ text = do
       changeMarkov text
       return []
 
 ------------------------------------------------------------------------
+      
+listArkov lister lenFun rest = do
+  ks <- readMS
+  let markovReply = lister ks memsize startphrase
+      w = words rest
+      memsize' = (readMaybe . head $ w) :: Maybe Int
+      (memsize, startphrase) = case memsize' of
+                                 Nothing -> (lenFun rest, rest)
+                                 Just x -> (x, [])
+  return [markovReply] -- following comments are failed attempt to retrieve list of nicks in channel and prevent highlighting them by adding a suffix
 
 
-buildProbs :: Int -> P.ByteString -> Map.Map String String -> Map.Map String String
-buildProbs n xs m = if P.length xs < n+1 
+buildChains :: Ord a => Int -> [a] -> Map.Map [a] [a] -> Map.Map [a] [a]
+buildChains n xs m = if length xs < n+1 
                     then m 
-                    else buildProbs n (P.tail xs) (Map.insertWith (++) k v m)
+                    else buildChains n (tail xs) (Map.insertWith (++) k v m)
+                        where subseq = take (n+1) xs
+                              k = init $ subseq
+                              v = [last subseq]
+
+buildChainsB :: Int -> P.ByteString -> Map.Map String String -> Map.Map String String
+buildChainsB n xs m = if P.length xs < n+1 
+                    then m 
+                    else buildChainsB n (P.tail xs) (Map.insertWith (++) k v m)
                         where subseq = P.take (n+1) xs
                               k = P.unpack . P.init $ subseq
-                              v = [P.last subseq]
+                              v = [P.last $ subseq]
 
+buildProbs :: Ord a => Int -> [a] -> Map.Map [a] Int -> Map.Map [a] Int
+buildProbs n xs m = if length xs < n+1 
+                    then m 
+                    else buildProbs n (tail xs) (Map.insertWith (+) k 1 m)
+                        where k = take n xs
+
+comprext :: Map.Map [String] Int -> Int -> [String] -> String
+comprext _ _     []     = []
+comprext m thres (x:xs) = let nums = case Map.lookup [x] m of 
+                                       Nothing -> 0
+                                       Just x -> x
+                          in if nums < thres 
+                             then x ++ " " ++ (comprext m thres $ xs)
+                             else comprext m thres xs -- improbable word
+  
+listComprext :: MarkovState -> String -> String
+listComprext ks rest = comprext (buildProbs 1 (words . P.unpack $ ks) Map.empty) 4 (words rest)
 
 uniformPick :: Random.RandomGen g => [a] -> g -> (a, g)
 uniformPick xs g = MonadRandom.runRand (MonadRandom.fromList . flip zip (repeat 1) $ xs) g
@@ -65,15 +114,22 @@ generateNext m g lastElems n = case pickFromValues m g lastElems of
                                      where nextElems = tail lastElems ++ [nextElem]
                                
         
-listMarkov :: Int -> String -> Markov LB [String]
-listMarkov n startPhrase = do
-    ks <- readMS
-    let m = buildProbs n ks Map.empty
-        g = Random.mkStdGen (P.length ks)
-        (firstKey, g') = case startPhrase of 
-                           [] -> uniformPick (Map.keys m) g
-                           _  -> (startPhrase, g)
-    return $ [firstKey ++ (generateNext m g' firstKey 150)]
+listMarkov :: MarkovState -> Int -> String -> String
+listMarkov ks n startPhrase = firstKey ++ (generateNext m g' firstKey 150)
+    where m = buildChainsB n ks Map.empty
+          g = Random.mkStdGen (P.length ks)
+          (firstKey, g') = case startPhrase of 
+                             [] -> uniformPick (Map.keys m) g
+                             _  -> (startPhrase, g)
+    
+listWarkov :: MarkovState -> Int -> String -> String
+listWarkov ks n startPhrase = concat . intersperse " " $ firstKey ++ (generateNext m g' firstKey 20)
+    where m = buildChains n (words . P.unpack $ ks) Map.empty
+          g = Random.mkStdGen (P.length ks)
+          (firstKey, g') = case startPhrase of 
+                             [] -> uniformPick (Map.keys m) g
+                             _  -> (words startPhrase, g)
+    
 
 changeMarkov :: String -> Markov LB [String]
 changeMarkov msg = withMS $ \fm write -> do
