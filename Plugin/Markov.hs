@@ -1,53 +1,73 @@
 {-# LANGUAGE TemplateHaskell, MultiParamTypeClasses, TypeSynonymInstances #-}
 -- | Markov
-module Plugin.Markov (theModule) where
+module Plugin.Markov (markovPlugin) where
 
-import Plugin
-import qualified Message as Msg (nick, Nick, Message, showNick, readNick, lambdabotName, nName, names, channels)
-import qualified NickEq as E
+import Lambdabot.Plugin
+--import qualified Message as Msg (nick, Nick, Message, showNick, readNick, lambdabotName, nName, names, channels)
+--import qualified NickEq as E
 import qualified Data.Map as Map
 import qualified Data.ByteString.Char8 as P
+import Data.List(intersperse)
 
-import Text.Printf
-import Text.Regex
 import System.Random as Random
 import Control.Monad.Random as MonadRandom
 
-$(plugin "Markov")
+
+markovPlugin :: Module MarkovState --(Map.Map P.ByteString [P.ByteString])
+markovPlugin = newModule
+    { moduleDefState  = return P.empty
+    , moduleSerialize = Just stdSerial
+    , contextual = changeMarkov
+    , moduleCmds = return
+        [ (command "markov")
+            { aliases = []
+            , help = say "markov [number of letters | start phrase]"
+            , process = listArkov listMarkov length  -- markov
+            }
+        , (command "warkov")
+            { aliases = []
+            , help = say "warkov [number of words | start phrase]"
+            , process = listArkov listMarkov (length . words)  -- markov
+            }
+        ]
+    }
 
 
 type MarkovState = P.ByteString
-type Markov m a = ModuleT MarkovState m a
+
+listToMaybe :: [a] -> Maybe a
+listToMaybe []        =  Nothing
+listToMaybe (a:_)     =  Just a
 
 readMaybe :: (Read a) => String -> Maybe a
 readMaybe = fmap fst . listToMaybe . reads
 
-msgChans :: Msg.Message a => a -> [String]
-msgChans msg = map Msg.nName $ Msg.channels msg
+-- msgChans :: Msg.Message a => a -> [String]
+-- msgChans msg = map Msg.nName $ Msg.channels msg
 
-instance Module MarkovModule MarkovState where
+-- instance Module MarkovModule MarkovState where
 
-    moduleCmds _ = ["markov", "warkov", "comprext"]
-    moduleHelp _ "markov" = "markov [<number of letters> | <start phrase>]"
-    moduleHelp _ "warkov" = "warkov [<number of words> | <start phrase>]"
-    moduleHelp _ "comprext" = "comprext <phrase>"
+--     moduleCmds _ = ["markov", "warkov", "comprext"]
+--     moduleHelp _ "markov" = "markov [<number of letters> | <start phrase>]"
+--     moduleHelp _ "warkov" = "warkov [<number of words> | <start phrase>]"
+--     moduleHelp _ "comprext" = "comprext <phrase>"
 
-    moduleDefState  _ = return P.empty
-    moduleSerialize _ = Just stdSerial
+--     moduleDefState  _ = return P.empty
+--     moduleSerialize _ = Just stdSerial
 
-    process      _ msg _ "comprext" rest = do 
-      ks <- readMS
-      return [listComprext ks rest]
-    process      _ msg _ "markov" rest = listArkov listMarkov length rest
-    process      _ msg _ "warkov" rest = listArkov listWarkov (length . words) rest
-      -- where fixedReply = subRegex regex' markovReply "\\0\0"
-          --regex' = mkRegex $ "(" ++ (intercalate "|" nicks) ++ ")"
-          --nicks = Msg.names "freenode" (msgChans msg)
+--     process      _ msg _ "comprext" rest = do 
+--       ks <- readMS
+--       return [listComprext ks rest]
+--     process      _ msg _ "markov" rest = listArkov listMarkov length rest
+--     process      _ msg _ "warkov" rest = listArkov listWarkov (length . words) rest
+--       -- where fixedReply = subRegex regex' markovReply "\\0\0"
+--           --regex' = mkRegex $ "(" ++ (intercalate "|" nicks) ++ ")"
+--           --nicks = Msg.names "freenode" (msgChans msg)
               
 
-    contextual   _ msg _ text = do
-      changeMarkov text
-      return []
+--     contextual   _ msg _ text = do
+--       changeMarkov text
+--       return []
 
 ------------------------------------------------------------------------
       
@@ -59,7 +79,8 @@ listArkov lister lenFun rest = do
       (memsize, startphrase) = case memsize' of
                                  Nothing -> (lenFun rest, rest)
                                  Just x -> (x, [])
-  return [markovReply] -- following comments are failed attempt to retrieve list of nicks in channel and prevent highlighting them by adding a suffix
+  say markovReply
+  --return [markovReply] -- following comments are failed attempt to retrieve list of nicks in channel and prevent highlighting them by adding a suffix
 
 
 buildChains :: Ord a => Int -> [a] -> Map.Map [a] [a] -> Map.Map [a] [a]
@@ -131,8 +152,8 @@ listWarkov ks n startPhrase = concat . intersperse " " $ firstKey ++ (generateNe
                              _  -> (words startPhrase, g)
     
 
-changeMarkov :: String -> Markov LB [String]
+--changeMarkov :: String -> Markov LB [String]
 changeMarkov msg = withMS $ \fm write -> do
                      let fm' = P.append fm (P.pack (" " ++ msg))
                      write fm'
-                     return ["wrote message: " ++ msg]
+                     return () -- ["wrote message: " ++ msg]
