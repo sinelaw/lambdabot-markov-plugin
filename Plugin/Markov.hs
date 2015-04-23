@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell, MultiParamTypeClasses, TypeSynonymInstances #-}
+{-# LANGUAGE GADTs, TemplateHaskell, MultiParamTypeClasses, TypeSynonymInstances #-}
 -- | Markov
 module Plugin.Markov (markovPlugin) where
 
